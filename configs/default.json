@@ -1,0 +1,28 @@
+{
+  "model": {
+    "layers": 6,
+    "d_model": 256,
+    "n_heads": 4,
+    "context_len": 256,
+    "vocab_size": 50257
+  },
+  "training": {
+    "optimizer": "adamw",
+    "lr": 3e-4,
+    "weight_decay": 0.1,
+    "warmup_steps": 500,
+    "epochs": 5,
+    "batch_size": 32,
+    "grad_clip": 1.0
+  },
+  "bottleneck": {
+    "type": "none",
+    "placement": null,
+    "activation": null,
+    "rank": null
+  },
+  "seed": 0,
+  "eval_samples": 1024,
+  "checkpoint_every_epoch": true,
+  "save_activations": true
+}

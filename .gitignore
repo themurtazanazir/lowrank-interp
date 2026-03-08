@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Results — large files synced via git-lfs
+results/checkpoints/
+results/activations/
+
+# Metrics and figures ARE tracked
+!results/metrics/
+!figures/
+
+# Environment
+.venv/
+venv/
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Notebooks — keep template, ignore Colab autosave artifacts
+notebooks/.ipynb_checkpoints/
+
+# Editors
+.vscode/
+.idea/
