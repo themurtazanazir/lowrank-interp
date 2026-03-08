@@ -60,9 +60,8 @@ def analyze_group(group, output_dir="results", device=None):
     for r in runs:
         print(f"  {r}")
 
-    # Load first config for shared settings
-    with open(os.path.join(runs[0], "config.json")) as f:
-        base_config = json.load(f)
+    # Load first model to get shared config + set up dataloader
+    first_model, base_config = load_model(runs[0], device)
 
     _, val_dl = get_dataloaders(base_config, max_val=base_config.get("eval_samples", 1024))
 
@@ -74,8 +73,10 @@ def analyze_group(group, output_dir="results", device=None):
     # Extract activations one model at a time to limit memory
     all_layer_acts = []
     all_bn_acts = []
-    for r in runs:
-        model, _ = load_model(r, device)
+    models_to_process = [(runs[0], first_model)] + [(r, None) for r in runs[1:]]
+    for r, model in models_to_process:
+        if model is None:
+            model, _ = load_model(r, device)
 
         acts = extract_activations(model, val_dl, layer_indices, device, max_batches=32)
         all_layer_acts.append(acts)
