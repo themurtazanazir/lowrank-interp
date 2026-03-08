@@ -7,12 +7,24 @@ Handles: optimizer setup, LR schedule, checkpointing, logging.
 import json
 import math
 import os
+import random
 
+import numpy as np
 import torch
 from tqdm import tqdm
 
 from src.model import Transformer
 from src.data import get_dataloaders
+
+
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def setup_optimizer(model, config):
@@ -60,9 +72,7 @@ def train(config, output_dir="results", device=None, max_steps=None):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    torch.manual_seed(config["seed"])
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(config["seed"])
+    seed_everything(config["seed"])
 
     name = run_name(config)
     ckpt_dir = os.path.join(output_dir, "checkpoints", name)
@@ -77,13 +87,20 @@ def train(config, output_dir="results", device=None, max_steps=None):
     model = Transformer(config).to(device)
     print(f"[{name}] params={model.count_parameters():,}")
 
-    train_dl, val_dl = get_dataloaders(config)
+    data_cfg = config.get("data", {})
+    train_dl, val_dl = get_dataloaders(
+        config,
+        max_train=data_cfg.get("max_train_examples"),
+        max_val=data_cfg.get("max_val_examples"),
+    )
 
     optimizer = setup_optimizer(model, config)
     tc = config["training"]
     total_steps = len(train_dl) * tc["epochs"]
     if max_steps:
         total_steps = min(total_steps, max_steps)
+
+    log_every = tc.get("log_every_steps", 500)
 
     step = 0
     log = []
@@ -101,8 +118,8 @@ def train(config, output_dir="results", device=None, max_steps=None):
             for pg in optimizer.param_groups:
                 pg["lr"] = lr
 
+            optimizer.zero_grad(set_to_none=True)
             _, loss = model(x, y)
-            optimizer.zero_grad()
             loss.backward()
 
             if tc.get("grad_clip"):
@@ -112,6 +129,9 @@ def train(config, output_dir="results", device=None, max_steps=None):
 
             pbar.set_postfix(loss=f"{loss.item():.3f}", lr=f"{lr:.2e}")
             step += 1
+
+            if step % log_every == 0:
+                print(f"[{name}] step {step} | train_loss={loss.item():.4f} lr={lr:.2e}")
 
         # End of epoch eval
         val_loss, val_ppl = evaluate(model, val_dl, device)

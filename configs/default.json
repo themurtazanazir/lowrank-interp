@@ -13,13 +13,20 @@
     "warmup_steps": 500,
     "epochs": 5,
     "batch_size": 32,
-    "grad_clip": 1.0
+    "grad_clip": 1.0,
+    "log_every_steps": 500
+  },
+  "data": {
+    "num_workers": 0,
+    "max_train_examples": null,
+    "max_val_examples": null
   },
   "bottleneck": {
     "type": "none",
     "placement": null,
     "activation": null,
-    "rank": null
+    "rank": null,
+    "residual": false
   },
   "seed": 0,
   "eval_samples": 1024,

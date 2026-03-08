@@ -5,9 +5,13 @@ Bottleneck variants:
   - "between": inserted between consecutive transformer blocks (constrains residual stream)
   - "mlp": replaces the MLP hidden layer within each block (constrains internal computation)
 
-Activation variants:
-  - "linear": W_down @ W_up (pure rank constraint, basis is arbitrary)
-  - "relu": ReLU(W_down @ x) @ W_up (breaks rotational symmetry)
+Activation variants (for bottleneck):
+  - "linear": pure rank constraint, no nonlinearity in bottleneck (basis is arbitrary)
+  - "relu": ReLU in bottleneck (breaks rotational symmetry, induces identifiability)
+
+Between-block residual modes:
+  - "residual": x = x + bottleneck(x)  — model can route around the bottleneck
+  - "replacement": x = bottleneck(x)   — representation must pass through the bottleneck
 """
 
 import torch
@@ -46,7 +50,12 @@ class MLP(nn.Module):
 
 
 class BottleneckMLP(nn.Module):
-    """MLP with bottleneck replacing the hidden layer: d_model -> rank -> d_model."""
+    """MLP with bottleneck replacing the hidden layer: d_model -> rank -> d_model.
+
+    activation="linear" uses GELU (standard nonlinearity, only rank is constrained).
+    activation="relu" uses ReLU (breaks rotational symmetry for identifiability).
+    This ensures "linear" vs "relu" compares only the activation type, not rank+nonlinearity.
+    """
 
     def __init__(self, d_model, rank, activation="relu"):
         super().__init__()
@@ -58,6 +67,8 @@ class BottleneckMLP(nn.Module):
         h = self.fc1(x)
         if self.activation == "relu":
             h = F.relu(h)
+        else:
+            h = F.gelu(h)
         return self.fc2(h)
 
 
@@ -112,6 +123,7 @@ class Transformer(nn.Module):
         bn_placement = bn_cfg.get("placement")
         bn_activation = bn_cfg.get("activation", "relu")
         bn_rank = bn_cfg.get("rank")
+        self.bn_residual = bn_cfg.get("residual", False)
 
         self.tok_emb = nn.Embedding(vocab, d)
         self.pos_emb = nn.Embedding(ctx, d)
@@ -153,7 +165,10 @@ class Transformer(nn.Module):
         """Re-apply bottleneck-specific init after _init_weights."""
         for bn in self.between_bottlenecks:
             nn.init.kaiming_normal_(bn.down.weight)
-            nn.init.zeros_(bn.up.weight)
+            if self.bn_residual:
+                # Residual mode: start bottleneck at zero so it doesn't disrupt early training
+                nn.init.zeros_(bn.up.weight)
+            # Replacement mode: keep the normal_(0.02) init from _init_weights
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -164,7 +179,10 @@ class Transformer(nn.Module):
         for i, block in enumerate(self.blocks):
             x = block(x)
             if i < len(self.between_bottlenecks):
-                x = x + self.between_bottlenecks[i](x)
+                if self.bn_residual:
+                    x = x + self.between_bottlenecks[i](x)
+                else:
+                    x = self.between_bottlenecks[i](x)
 
         x = self.ln_f(x)
         logits = self.head(x)
