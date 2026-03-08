@@ -5,7 +5,6 @@ Post-hoc analysis: load checkpoints, compute CKA/MMCS/PR, generate plots.
 Usage:
   python scripts/analyze.py --group baseline          # all baseline seeds
   python scripts/analyze.py --group between_relu_r64  # all seeds for one config
-  python scripts/analyze.py --compare                 # compare all groups
 """
 
 import argparse
@@ -42,7 +41,7 @@ def load_model(ckpt_dir, device):
     with open(os.path.join(ckpt_dir, "config.json")) as f:
         config = json.load(f)
     model = Transformer(config).to(device)
-    state = torch.load(os.path.join(ckpt_dir, "final.pt"), map_location=device)
+    state = torch.load(os.path.join(ckpt_dir, "final.pt"), map_location=device, weights_only=True)
     model.load_state_dict(state)
     model.eval()
     return model, config
@@ -61,25 +60,31 @@ def analyze_group(group, output_dir="results", device=None):
     for r in runs:
         print(f"  {r}")
 
-    # Load all models and extract activations
-    models = []
-    configs = []
-    for r in runs:
-        model, config = load_model(r, device)
-        models.append(model)
-        configs.append(config)
+    # Load first config for shared settings
+    with open(os.path.join(runs[0], "config.json")) as f:
+        base_config = json.load(f)
 
-    # Use first model's config for dataloader
-    _, val_dl = get_dataloaders(configs[0], max_val=configs[0].get("eval_samples", 1024))
+    _, val_dl = get_dataloaders(base_config, max_val=base_config.get("eval_samples", 1024))
 
-    n_layers = configs[0]["model"]["layers"]
+    n_layers = base_config["model"]["layers"]
     layer_indices = list(range(n_layers))
+    bn_cfg = base_config["bottleneck"]
+    has_bottleneck = bn_cfg["type"] != "none"
 
-    # Extract layer activations per seed
+    # Extract activations one model at a time to limit memory
     all_layer_acts = []
-    for model in models:
+    all_bn_acts = []
+    for r in runs:
+        model, _ = load_model(r, device)
+
         acts = extract_activations(model, val_dl, layer_indices, device, max_batches=32)
         all_layer_acts.append(acts)
+
+        if has_bottleneck:
+            bn_acts = extract_bottleneck_activations(model, val_dl, device, max_batches=32)
+            all_bn_acts.append(bn_acts)
+
+        del model
 
     # CKA per layer
     print("\n--- Linear CKA (pairwise across seeds) ---")
@@ -92,17 +97,11 @@ def analyze_group(group, output_dir="results", device=None):
 
         results["cka"][f"layer_{layer_idx}"] = {"mean": float(mean_cka), "std": float(std_cka)}
         results["pr"][f"layer_{layer_idx}"] = float(mean_pr)
-        print(f"  Layer {layer_idx}: CKA={mean_cka:.4f}±{std_cka:.4f}  PR={mean_pr:.1f}")
+        print(f"  Layer {layer_idx}: CKA={mean_cka:.4f}+/-{std_cka:.4f}  PR={mean_pr:.1f}")
 
-    # Bottleneck-specific metrics
-    bn_type = configs[0]["bottleneck"]["type"]
-    if bn_type != "none" and configs[0]["bottleneck"]["placement"] == "between":
+    # Bottleneck-specific metrics (works for both "between" and "mlp" placements)
+    if has_bottleneck and all_bn_acts and len(all_bn_acts[0]) > 0:
         print("\n--- Bottleneck Metrics ---")
-        all_bn_acts = []
-        for model in models:
-            bn_acts = extract_bottleneck_activations(model, val_dl, device, max_batches=32)
-            all_bn_acts.append(bn_acts)
-
         n_bn = len(all_bn_acts[0])
         results["bottleneck_cka"] = {}
         results["bottleneck_mmcs"] = {}
@@ -116,12 +115,12 @@ def analyze_group(group, output_dir="results", device=None):
             results["bottleneck_cka"][f"bn_{bn_idx}"] = {"mean": float(mean_cka), "std": float(std_cka)}
             results["bottleneck_pr"][f"bn_{bn_idx}"] = float(np.mean(pr_vals))
 
-            print(f"  BN {bn_idx}: CKA={mean_cka:.4f}±{std_cka:.4f}  PR={np.mean(pr_vals):.1f}")
+            print(f"  BN {bn_idx}: CKA={mean_cka:.4f}+/-{std_cka:.4f}  PR={np.mean(pr_vals):.1f}")
 
-            if configs[0]["bottleneck"]["activation"] == "relu":
+            if bn_cfg.get("activation") == "relu":
                 mean_m, std_m, _ = pairwise_mmcs(bn_per_seed)
                 results["bottleneck_mmcs"][f"bn_{bn_idx}"] = {"mean": float(mean_m), "std": float(std_m)}
-                print(f"         MMCS={mean_m:.4f}±{std_m:.4f}")
+                print(f"         MMCS={mean_m:.4f}+/-{std_m:.4f}")
 
     # Save results
     metrics_dir = os.path.join(output_dir, "metrics")

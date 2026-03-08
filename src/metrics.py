@@ -9,6 +9,8 @@ Metrics for measuring representational identifiability.
 import torch
 import numpy as np
 
+from src.model import Bottleneck, BottleneckMLP
+
 
 def extract_activations(model, dataloader, layer_indices, device, max_batches=None):
     """Extract activations at specified layers for a dataset.
@@ -21,11 +23,9 @@ def extract_activations(model, dataloader, layer_indices, device, max_batches=No
 
     def make_hook(layer_idx):
         def hook_fn(module, input, output):
-            # output shape: (B, T, d_model) — take mean over sequence dim
             activations[layer_idx].append(output.detach().mean(dim=1).cpu())
         return hook_fn
 
-    # Register hooks on blocks
     for idx in layer_indices:
         h = model.blocks[idx].register_forward_hook(make_hook(idx))
         hooks.append(h)
@@ -43,29 +43,85 @@ def extract_activations(model, dataloader, layer_indices, device, max_batches=No
     return {k: torch.cat(v, dim=0) for k, v in activations.items()}
 
 
-def extract_bottleneck_activations(model, dataloader, device, max_batches=None):
-    """Extract activations at between-block bottlenecks (after down projection, before up).
+def _extract_with_hooks(model, dataloader, modules, device, max_batches=None):
+    """Generic hook-based activation extraction.
 
-    Returns list of tensors, one per bottleneck, each shape (N, rank).
+    Args:
+        modules: list of (name, nn.Module) pairs to hook
+    Returns:
+        dict: {name: tensor of shape (N, d)}
     """
     model.eval()
-    n_bn = len(model.between_bottlenecks)
-    if n_bn == 0:
-        return []
-
-    activations = [[] for _ in range(n_bn)]
+    activations = {name: [] for name, _ in modules}
     hooks = []
 
-    def make_hook(bn_idx, activation):
+    def make_hook(name):
         def hook_fn(module, input, output):
-            act = output.detach().mean(dim=1)
-            if activation == "relu":
-                act = torch.relu(act)
-            activations[bn_idx].append(act.cpu())
+            activations[name].append(output.detach().mean(dim=1).cpu())
         return hook_fn
 
-    for i, bn in enumerate(model.between_bottlenecks):
-        h = bn.down.register_forward_hook(make_hook(i, bn.activation))
+    for name, module in modules:
+        h = module.register_forward_hook(make_hook(name))
+        hooks.append(h)
+
+    with torch.no_grad():
+        for i, (x, _) in enumerate(dataloader):
+            if max_batches and i >= max_batches:
+                break
+            x = x.to(device)
+            model(x)
+
+    for h in hooks:
+        h.remove()
+
+    return {k: torch.cat(v, dim=0) for k, v in activations.items()}
+
+
+def extract_bottleneck_activations(model, dataloader, device, max_batches=None):
+    """Extract post-activation bottleneck representations.
+
+    Works for both between-block bottlenecks and MLP bottlenecks.
+    Hooks into the full Bottleneck/BottleneckMLP module to get the intermediate
+    representation after activation (not pre-activation).
+
+    Returns list of tensors, each shape (N, rank).
+    """
+    model.eval()
+
+    # Find all bottleneck modules
+    bottleneck_modules = []
+    for name, module in model.named_modules():
+        if isinstance(module, Bottleneck):
+            bottleneck_modules.append((name, module))
+        elif isinstance(module, BottleneckMLP):
+            bottleneck_modules.append((name, module))
+
+    if not bottleneck_modules:
+        return []
+
+    # Hook into fc1/down to capture the intermediate representation
+    activations = [[] for _ in bottleneck_modules]
+    hooks = []
+
+    for idx, (name, module) in enumerate(bottleneck_modules):
+        if isinstance(module, Bottleneck):
+            target = module.down
+            act_type = module.activation
+        else:
+            target = module.fc1
+            act_type = module.activation
+
+        def make_hook(bn_idx, activation):
+            def hook_fn(mod, input, output):
+                act = output.detach().mean(dim=1)
+                if activation == "relu":
+                    act = torch.relu(act)
+                elif activation != "linear":
+                    act = torch.nn.functional.gelu(act)
+                activations[bn_idx].append(act.cpu())
+            return hook_fn
+
+        h = target.register_forward_hook(make_hook(idx, act_type))
         hooks.append(h)
 
     with torch.no_grad():
@@ -109,14 +165,11 @@ def mmcs(X, Y):
     X, Y: numpy arrays of shape (N, d) — each column is a feature's activation profile.
     Returns: scalar in [0, 1]
     """
-    # Normalize columns (features)
     X_norm = X / (np.linalg.norm(X, axis=0, keepdims=True) + 1e-10)
     Y_norm = Y / (np.linalg.norm(Y, axis=0, keepdims=True) + 1e-10)
 
-    # Cosine similarity matrix: (d, d)
     sim = X_norm.T @ Y_norm
 
-    # For each feature in X, find best match in Y (and vice versa)
     max_sim_x = np.max(np.abs(sim), axis=1).mean()
     max_sim_y = np.max(np.abs(sim), axis=0).mean()
 
@@ -153,7 +206,6 @@ def pairwise_cka(activation_list):
             matrix[j, i] = c
         matrix[i, i] = 1.0
 
-    # Extract upper triangle
     vals = [matrix[i, j] for i in range(n) for j in range(i + 1, n)]
     return np.mean(vals), np.std(vals), matrix
 

@@ -50,3 +50,10 @@ figures/           — generated plots (tracked)
 - **Seeds:** 0-4 (5 seeds per config, giving 10 pairwise comparisons)
 
 ## Decisions Log
+
+- **Between-block bottleneck defaults to replacement mode** (`residual: false`). With residual mode, the model can learn to zero out W_up and route around the bottleneck entirely, defeating the constraint. Residual mode is available via `"residual": true` in config for comparison.
+- **BottleneckMLP "linear" uses GELU** (not identity). This ensures "linear" vs "relu" compares only the activation type at the bottleneck, not rank+nonlinearity vs rank-only. Without this, the "linear" MLP variant would confound removing both rank and nonlinearity.
+- **Vocab size is 50257** (GPT-2 tokenizer). The embedding matrix (~12.9M params) dominates the ~5-8M estimate from Plan.md. A smaller custom BPE (4096-8192) is a future option to bring param counts in line.
+- **num_workers defaults to 0** for Colab compatibility. Set via `data.num_workers` in config.
+- **Full RNG seeding** for reproducibility: random, numpy, torch, cuda, cudnn deterministic. DataLoader also gets a seeded generator.
+- **Bottleneck activation extraction** hooks into the down-projection and manually applies the activation function, to capture the post-activation representation (what matters for MMCS). Works for both Bottleneck and BottleneckMLP.

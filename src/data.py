@@ -19,14 +19,17 @@ class TinyStoriesDataset(Dataset):
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         ds = load_dataset("roneneldan/TinyStories", split=split)
-        if max_examples:
+        if max_examples is not None:
             ds = ds.select(range(min(max_examples, len(ds))))
 
-        # Tokenize and concatenate into one long sequence, then chunk
+        # Batch tokenize for speed
+        texts = ds["text"]
+        encoded = self.tokenizer(texts, add_special_tokens=False)["input_ids"]
+
+        # Concatenate into one long sequence, then chunk
         all_tokens = []
-        for example in ds:
-            tokens = self.tokenizer.encode(example["text"])
-            all_tokens.extend(tokens)
+        for ids in encoded:
+            all_tokens.extend(ids)
             all_tokens.append(self.tokenizer.eos_token_id)
 
         # Chunk into context_len + 1 blocks (input + target)
@@ -46,11 +49,22 @@ def get_dataloaders(config, max_train=None, max_val=None):
     """Create train and validation dataloaders."""
     ctx = config["model"]["context_len"]
     bs = config["training"]["batch_size"]
+    num_workers = config.get("data", {}).get("num_workers", 0)
+    seed = config.get("seed", 0)
 
     train_ds = TinyStoriesDataset("train", ctx, max_examples=max_train)
     val_ds = TinyStoriesDataset("validation", ctx, max_examples=max_val)
 
-    train_dl = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=2, pin_memory=True)
-    val_dl = DataLoader(val_ds, batch_size=bs, shuffle=False, num_workers=2, pin_memory=True)
+    g = torch.Generator()
+    g.manual_seed(seed)
+
+    train_dl = DataLoader(
+        train_ds, batch_size=bs, shuffle=True,
+        num_workers=num_workers, pin_memory=True, generator=g,
+    )
+    val_dl = DataLoader(
+        val_ds, batch_size=bs, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )
 
     return train_dl, val_dl

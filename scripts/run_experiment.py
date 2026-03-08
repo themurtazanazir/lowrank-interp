@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--activation", choices=["linear", "relu"], default=None)
     parser.add_argument("--rank", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--residual", action="store_true", help="Use residual (additive) bottleneck instead of replacement")
     parser.add_argument("--device", default=None)
     parser.add_argument("--output_dir", default="results")
     parser.add_argument("--max_steps", type=int, default=None, help="Limit steps for smoke tests")
@@ -44,6 +45,8 @@ def main():
         config["bottleneck"]["rank"] = args.rank
     if args.seed is not None:
         config["seed"] = args.seed
+    if args.residual:
+        config["bottleneck"]["residual"] = True
 
     # Validate
     bn = config["bottleneck"]
