@@ -43,46 +43,12 @@ def extract_activations(model, dataloader, layer_indices, device, max_batches=No
     return {k: torch.cat(v, dim=0) for k, v in activations.items()}
 
 
-def _extract_with_hooks(model, dataloader, modules, device, max_batches=None):
-    """Generic hook-based activation extraction.
-
-    Args:
-        modules: list of (name, nn.Module) pairs to hook
-    Returns:
-        dict: {name: tensor of shape (N, d)}
-    """
-    model.eval()
-    activations = {name: [] for name, _ in modules}
-    hooks = []
-
-    def make_hook(name):
-        def hook_fn(module, input, output):
-            activations[name].append(output.detach().mean(dim=1).cpu())
-        return hook_fn
-
-    for name, module in modules:
-        h = module.register_forward_hook(make_hook(name))
-        hooks.append(h)
-
-    with torch.no_grad():
-        for i, (x, _) in enumerate(dataloader):
-            if max_batches and i >= max_batches:
-                break
-            x = x.to(device)
-            model(x)
-
-    for h in hooks:
-        h.remove()
-
-    return {k: torch.cat(v, dim=0) for k, v in activations.items()}
-
-
 def extract_bottleneck_activations(model, dataloader, device, max_batches=None):
     """Extract post-activation bottleneck representations.
 
-    Works for both between-block bottlenecks and MLP bottlenecks.
-    Hooks into the full Bottleneck/BottleneckMLP module to get the intermediate
-    representation after activation (not pre-activation).
+    Works for both between-block Bottleneck and MLP BottleneckMLP modules.
+    Hooks into the down/fc1 projection and applies the matching activation
+    to capture the true intermediate representation.
 
     Returns list of tensors, each shape (N, rank).
     """
@@ -91,37 +57,32 @@ def extract_bottleneck_activations(model, dataloader, device, max_batches=None):
     # Find all bottleneck modules
     bottleneck_modules = []
     for name, module in model.named_modules():
-        if isinstance(module, Bottleneck):
-            bottleneck_modules.append((name, module))
-        elif isinstance(module, BottleneckMLP):
+        if isinstance(module, (Bottleneck, BottleneckMLP)):
             bottleneck_modules.append((name, module))
 
     if not bottleneck_modules:
         return []
 
-    # Hook into fc1/down to capture the intermediate representation
     activations = [[] for _ in bottleneck_modules]
     hooks = []
 
     for idx, (name, module) in enumerate(bottleneck_modules):
-        if isinstance(module, Bottleneck):
-            target = module.down
-            act_type = module.activation
-        else:
-            target = module.fc1
-            act_type = module.activation
+        target = module.down if isinstance(module, Bottleneck) else module.fc1
+        is_mlp = isinstance(module, BottleneckMLP)
 
-        def make_hook(bn_idx, activation):
+        def make_hook(bn_idx, activation, mlp_bottleneck):
             def hook_fn(mod, input, output):
                 act = output.detach().mean(dim=1)
                 if activation == "relu":
                     act = torch.relu(act)
-                elif activation != "linear":
+                elif mlp_bottleneck:
+                    # BottleneckMLP uses GELU for activation="linear"
                     act = torch.nn.functional.gelu(act)
+                # Bottleneck with activation="linear": identity (no-op)
                 activations[bn_idx].append(act.cpu())
             return hook_fn
 
-        h = target.register_forward_hook(make_hook(idx, act_type))
+        h = target.register_forward_hook(make_hook(idx, module.activation, is_mlp))
         hooks.append(h)
 
     with torch.no_grad():
