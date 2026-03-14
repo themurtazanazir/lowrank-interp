@@ -22,15 +22,17 @@ class TinyStoriesDataset(Dataset):
         if max_examples is not None:
             ds = ds.select(range(min(max_examples, len(ds))))
 
-        # Batch tokenize for speed
-        texts = list(ds["text"])
-        encoded = self.tokenizer(texts, add_special_tokens=False)["input_ids"]
-
-        # Concatenate into one long sequence, then chunk
+        # Tokenize in chunks to limit memory (full dataset can exceed Colab RAM)
+        CHUNK = 50_000
+        eos = self.tokenizer.eos_token_id
         all_tokens = []
-        for ids in encoded:
-            all_tokens.extend(ids)
-            all_tokens.append(self.tokenizer.eos_token_id)
+        for start in range(0, len(ds), CHUNK):
+            texts = list(ds[start:start + CHUNK]["text"])
+            encoded = self.tokenizer(texts, add_special_tokens=False)["input_ids"]
+            for ids in encoded:
+                all_tokens.extend(ids)
+                all_tokens.append(eos)
+            del texts, encoded
 
         # Chunk into context_len + 1 blocks (input + target)
         n_chunks = len(all_tokens) // (context_len + 1)
