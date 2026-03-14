@@ -18,8 +18,8 @@
   },
   "data": {
     "num_workers": 0,
-    "max_train_examples": null,
-    "max_val_examples": null
+    "max_train_examples": 100000,
+    "max_val_examples": 1000
   },
   "bottleneck": {
     "type": "none",
