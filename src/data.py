@@ -23,7 +23,7 @@ class TinyStoriesDataset(Dataset):
             ds = ds.select(range(min(max_examples, len(ds))))
 
         # Batch tokenize for speed
-        texts = ds["text"]
+        texts = list(ds["text"])
         encoded = self.tokenizer(texts, add_special_tokens=False)["input_ids"]
 
         # Concatenate into one long sequence, then chunk
