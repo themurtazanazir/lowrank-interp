@@ -60,8 +60,25 @@ def analyze_group(group, output_dir="results", device=None):
     for r in runs:
         print(f"  {r}")
 
+    # Collect val_ppl from training logs
+    ppl_per_seed = {}
+    for r in runs:
+        log_path = os.path.join(r, "log.json")
+        if os.path.exists(log_path):
+            with open(log_path) as f:
+                log = json.load(f)
+            best_ppl = min(entry["val_ppl"] for entry in log)
+            ppl_per_seed[os.path.basename(r)] = best_ppl
+
+    if ppl_per_seed:
+        ppl_vals = list(ppl_per_seed.values())
+        print(f"\n--- Val PPL (best per seed) ---")
+        for name, ppl in ppl_per_seed.items():
+            print(f"  {name}: {ppl:.2f}")
+        print(f"  mean={np.mean(ppl_vals):.2f} std={np.std(ppl_vals):.2f}")
+
     # Load first model to get shared config + set up dataloader
-    print("Loading first model for config...")
+    print("\nLoading first model for config...")
     first_model, base_config = load_model(runs[0], device)
 
     print("Loading validation data...")
@@ -100,6 +117,13 @@ def analyze_group(group, output_dir="results", device=None):
     # CKA + MMCS per layer
     print("\n--- Layer Metrics (pairwise across seeds) ---")
     results = {"cka": {}, "mmcs": {}, "pr": {}}
+    if ppl_per_seed:
+        ppl_vals = list(ppl_per_seed.values())
+        results["val_ppl"] = {
+            "per_seed": ppl_per_seed,
+            "mean": float(np.mean(ppl_vals)),
+            "std": float(np.std(ppl_vals)),
+        }
     for layer_idx in layer_indices:
         layer_acts = [a[layer_idx].numpy() for a in all_layer_acts]
         mean_cka, std_cka, _ = pairwise_cka(layer_acts)
