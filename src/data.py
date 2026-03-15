@@ -70,3 +70,16 @@ def get_dataloaders(config, max_train=None, max_val=None):
     )
 
     return train_dl, val_dl
+
+
+def get_val_dataloader(config, max_val=None):
+    """Create only the validation dataloader (for analysis)."""
+    ctx = config["model"]["context_len"]
+    bs = config["training"]["batch_size"]
+    num_workers = config.get("data", {}).get("num_workers", 0)
+
+    val_ds = TinyStoriesDataset("validation", ctx, max_examples=max_val)
+    return DataLoader(
+        val_ds, batch_size=bs, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )

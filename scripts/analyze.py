@@ -19,7 +19,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.model import Transformer
-from src.data import get_dataloaders
+from src.data import get_val_dataloader
 from src.metrics import (
     extract_activations,
     extract_bottleneck_activations,
@@ -63,7 +63,7 @@ def analyze_group(group, output_dir="results", device=None):
     # Load first model to get shared config + set up dataloader
     first_model, base_config = load_model(runs[0], device)
 
-    _, val_dl = get_dataloaders(base_config, max_val=base_config.get("eval_samples", 1024))
+    val_dl = get_val_dataloader(base_config, max_val=base_config.get("eval_samples", 1024))
 
     n_layers = base_config["model"]["layers"]
     layer_indices = list(range(n_layers))
