@@ -1,6 +1,5 @@
 #!/bin/bash
-# Run a sweep of experiments across 2 GPUs.
-# Seeds are distributed round-robin across GPUs, 2 jobs run in parallel.
+# Run a sweep of experiments, auto-parallelized across available GPUs.
 #
 # Usage:
 #   bash scripts/run_sweep.sh baseline                    # 4 baseline seeds
@@ -13,11 +12,17 @@ PLACEMENT="${1:-}"
 ACTIVATION="${2:-}"
 RANKS="${3:-64}"
 SEEDS="0 1 2 3"
-NUM_GPUS=2
+
+# Auto-detect GPUs (falls back to 1 for CPU-only)
+NUM_GPUS=$(python -c "import torch; print(max(1, torch.cuda.device_count()))" 2>/dev/null || echo 1)
+echo "Detected $NUM_GPUS GPU(s)"
+
+JOB_IDX=0
 
 run_job() {
     local seed=$1
-    local gpu=$((seed % NUM_GPUS))
+    local gpu=$((JOB_IDX % NUM_GPUS))
+    JOB_IDX=$((JOB_IDX + 1))
     shift
     echo "=== GPU $gpu | seed=$seed | $* ==="
     CUDA_VISIBLE_DEVICES=$gpu python scripts/run_experiment.py --seed "$seed" "$@"
@@ -26,7 +31,6 @@ run_job() {
 if [ "$PLACEMENT" = "baseline" ]; then
     for SEED in $SEEDS; do
         run_job "$SEED" &
-        # Wait if we've filled all GPUs
         if (( $(jobs -r | wc -l) >= NUM_GPUS )); then
             wait -n
         fi
