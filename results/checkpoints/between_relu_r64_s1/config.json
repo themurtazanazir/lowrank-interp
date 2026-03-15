@@ -1,0 +1,35 @@
+{
+  "model": {
+    "layers": 6,
+    "d_model": 256,
+    "n_heads": 4,
+    "context_len": 256,
+    "vocab_size": 50257
+  },
+  "training": {
+    "optimizer": "adamw",
+    "lr": 0.0003,
+    "weight_decay": 0.1,
+    "warmup_steps": 500,
+    "epochs": 5,
+    "batch_size": 64,
+    "grad_clip": 1.0,
+    "log_every_steps": 500
+  },
+  "data": {
+    "num_workers": 0,
+    "max_train_examples": 100000,
+    "max_val_examples": 1000
+  },
+  "bottleneck": {
+    "type": "bottleneck",
+    "placement": "between",
+    "activation": "relu",
+    "rank": 64,
+    "residual": false
+  },
+  "seed": 1,
+  "eval_samples": 1024,
+  "checkpoint_every_epoch": true,
+  "save_activations": true
+}
