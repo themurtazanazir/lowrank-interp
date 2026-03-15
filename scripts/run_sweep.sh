@@ -20,17 +20,17 @@ echo "Detected $NUM_GPUS GPU(s)"
 JOB_IDX=0
 
 run_job() {
-    local seed=$1
-    local gpu=$((JOB_IDX % NUM_GPUS))
-    JOB_IDX=$((JOB_IDX + 1))
-    shift
+    local gpu=$1
+    local seed=$2
+    shift 2
     echo "=== GPU $gpu | seed=$seed | $* ==="
     CUDA_VISIBLE_DEVICES=$gpu python scripts/run_experiment.py --seed "$seed" "$@"
 }
 
 if [ "$PLACEMENT" = "baseline" ]; then
     for SEED in $SEEDS; do
-        run_job "$SEED" &
+        run_job $((JOB_IDX % NUM_GPUS)) "$SEED" &
+        JOB_IDX=$((JOB_IDX + 1))
         if (( $(jobs -r | wc -l) >= NUM_GPUS )); then
             wait -n
         fi
@@ -39,7 +39,8 @@ if [ "$PLACEMENT" = "baseline" ]; then
 else
     for RANK in $RANKS; do
         for SEED in $SEEDS; do
-            run_job "$SEED" --placement "$PLACEMENT" --activation "$ACTIVATION" --rank "$RANK" &
+            run_job $((JOB_IDX % NUM_GPUS)) "$SEED" --placement "$PLACEMENT" --activation "$ACTIVATION" --rank "$RANK" &
+            JOB_IDX=$((JOB_IDX + 1))
             if (( $(jobs -r | wc -l) >= NUM_GPUS )); then
                 wait -n
             fi
