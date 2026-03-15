@@ -12,7 +12,7 @@
     "weight_decay": 0.1,
     "warmup_steps": 500,
     "epochs": 5,
-    "batch_size": 32,
+    "batch_size": 128,
     "grad_clip": 1.0,
     "log_every_steps": 500
   },

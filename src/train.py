@@ -107,8 +107,9 @@ def train(config, output_dir="results", device=None, max_steps=None):
 
     print(f"[{name}] device={device}")
 
+    use_amp = device == "cuda"
     model = Transformer(config).to(device)
-    print(f"[{name}] params={model.count_parameters():,}")
+    print(f"[{name}] params={model.count_parameters():,} amp={use_amp}")
 
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
@@ -120,6 +121,7 @@ def train(config, output_dir="results", device=None, max_steps=None):
     )
 
     optimizer = setup_optimizer(model, config)
+    scaler = torch.amp.GradScaler(enabled=use_amp)
     tc = config["training"]
     total_steps = len(train_dl) * tc["epochs"]
     if max_steps:
@@ -146,13 +148,16 @@ def train(config, output_dir="results", device=None, max_steps=None):
                 pg["lr"] = lr
 
             optimizer.zero_grad(set_to_none=True)
-            _, loss = model(x, y)
-            loss.backward()
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                _, loss = model(x, y)
+            scaler.scale(loss).backward()
 
             if tc.get("grad_clip"):
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"])
 
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             pbar.set_postfix(loss=f"{loss.item():.3f}", lr=f"{lr:.2e}")
             step += 1
