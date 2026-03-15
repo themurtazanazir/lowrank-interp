@@ -61,8 +61,10 @@ def analyze_group(group, output_dir="results", device=None):
         print(f"  {r}")
 
     # Load first model to get shared config + set up dataloader
+    print("Loading first model for config...")
     first_model, base_config = load_model(runs[0], device)
 
+    print("Loading validation data...")
     val_dl = get_val_dataloader(base_config, max_val=base_config.get("eval_samples", 1024))
 
     n_layers = base_config["model"]["layers"]
@@ -74,18 +76,26 @@ def analyze_group(group, output_dir="results", device=None):
     all_layer_acts = []
     all_bn_acts = []
     models_to_process = [(runs[0], first_model)] + [(r, None) for r in runs[1:]]
-    for r, model in models_to_process:
+    for i, (r, model) in enumerate(models_to_process):
+        run_label = os.path.basename(r)
         if model is None:
+            print(f"[{i+1}/{len(runs)}] Loading {run_label}...")
             model, _ = load_model(r, device)
+        else:
+            print(f"[{i+1}/{len(runs)}] Using {run_label} (already loaded)")
 
+        print(f"[{i+1}/{len(runs)}] Extracting layer activations...")
         acts = extract_activations(model, val_dl, layer_indices, device, max_batches=32)
         all_layer_acts.append(acts)
 
         if has_bottleneck:
+            print(f"[{i+1}/{len(runs)}] Extracting bottleneck activations...")
             bn_acts = extract_bottleneck_activations(model, val_dl, device, max_batches=32)
             all_bn_acts.append(bn_acts)
 
         del model
+
+    print("\nComputing metrics...")
 
     # CKA per layer
     print("\n--- Linear CKA (pairwise across seeds) ---")

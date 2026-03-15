@@ -18,26 +18,31 @@ class TinyStoriesDataset(Dataset):
         self.tokenizer = tokenizer or AutoTokenizer.from_pretrained("gpt2")
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        print(f"[data] Loading {split} split...")
         ds = load_dataset("roneneldan/TinyStories", split=split)
         if max_examples is not None:
             ds = ds.select(range(min(max_examples, len(ds))))
+        print(f"[data] {len(ds)} examples loaded, tokenizing...")
 
         # Tokenize in chunks to limit memory (full dataset can exceed Colab RAM)
         CHUNK = 50_000
         eos = self.tokenizer.eos_token_id
         all_tokens = []
         for start in range(0, len(ds), CHUNK):
-            texts = list(ds[start:start + CHUNK]["text"])
+            end = min(start + CHUNK, len(ds))
+            texts = list(ds[start:end]["text"])
             encoded = self.tokenizer(texts, add_special_tokens=False)["input_ids"]
             for ids in encoded:
                 all_tokens.extend(ids)
                 all_tokens.append(eos)
             del texts, encoded
+            print(f"[data] Tokenized {end}/{len(ds)} examples")
 
         # Chunk into context_len + 1 blocks (input + target)
         n_chunks = len(all_tokens) // (context_len + 1)
         all_tokens = all_tokens[: n_chunks * (context_len + 1)]
         self.chunks = torch.tensor(all_tokens).view(n_chunks, context_len + 1)
+        print(f"[data] {split}: {n_chunks} chunks of {context_len} tokens")
 
     def __len__(self):
         return len(self.chunks)
