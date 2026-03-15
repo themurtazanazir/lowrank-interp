@@ -56,7 +56,7 @@ def analyze_group(group, output_dir="results", device=None):
         print(f"No runs found for group '{group}'")
         return
 
-    print(f"Found {len(runs)} runs for '{group}':")
+    print(f"Found {len(runs)} runs for '{group}' (device={device}):")
     for r in runs:
         print(f"  {r}")
 
