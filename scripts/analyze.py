@@ -97,18 +97,20 @@ def analyze_group(group, output_dir="results", device=None):
 
     print("\nComputing metrics...")
 
-    # CKA per layer
-    print("\n--- Linear CKA (pairwise across seeds) ---")
-    results = {"cka": {}, "pr": {}}
+    # CKA + MMCS per layer
+    print("\n--- Layer Metrics (pairwise across seeds) ---")
+    results = {"cka": {}, "mmcs": {}, "pr": {}}
     for layer_idx in layer_indices:
         layer_acts = [a[layer_idx].numpy() for a in all_layer_acts]
         mean_cka, std_cka, _ = pairwise_cka(layer_acts)
+        mean_mmcs, std_mmcs, _ = pairwise_mmcs(layer_acts)
         pr_vals = [participation_ratio(a) for a in layer_acts]
         mean_pr = np.mean(pr_vals)
 
         results["cka"][f"layer_{layer_idx}"] = {"mean": float(mean_cka), "std": float(std_cka)}
+        results["mmcs"][f"layer_{layer_idx}"] = {"mean": float(mean_mmcs), "std": float(std_mmcs)}
         results["pr"][f"layer_{layer_idx}"] = float(mean_pr)
-        print(f"  Layer {layer_idx}: CKA={mean_cka:.4f}+/-{std_cka:.4f}  PR={mean_pr:.1f}")
+        print(f"  Layer {layer_idx}: CKA={mean_cka:.4f}+/-{std_cka:.4f}  MMCS={mean_mmcs:.4f}+/-{std_mmcs:.4f}  PR={mean_pr:.1f}")
 
     # Bottleneck-specific metrics (works for both "between" and "mlp" placements)
     if has_bottleneck and all_bn_acts and len(all_bn_acts[0]) > 0:
