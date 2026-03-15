@@ -193,5 +193,21 @@ class Transformer(nn.Module):
 
         return logits, loss
 
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, temperature=0.8, top_k=40):
+        """Autoregressive generation. idx: (B, T) tensor of token indices."""
+        for _ in range(max_new_tokens):
+            # Crop to context length
+            idx_cond = idx[:, -self.pos_emb.num_embeddings:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, top_k)
+                logits[logits < v[:, [-1]]] = -float("inf")
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat([idx, idx_next], dim=1)
+        return idx
+
     def count_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

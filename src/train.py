@@ -12,9 +12,17 @@ import random
 import numpy as np
 import torch
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from src.model import Transformer
 from src.data import get_dataloaders
+
+# Fixed prompts for sanity-checking generation quality across epochs/runs
+SAMPLE_PROMPTS = [
+    "Once upon a time",
+    "The little dog",
+    "She wanted to",
+]
 
 
 def seed_everything(seed):
@@ -59,6 +67,21 @@ def evaluate(model, val_dl, device):
     return avg_loss, math.exp(avg_loss)
 
 
+@torch.no_grad()
+def generate_samples(model, tokenizer, device, max_new_tokens=64):
+    """Generate from fixed prompts and print for sanity checking."""
+    model.eval()
+    print("  --- samples ---")
+    for prompt in SAMPLE_PROMPTS:
+        ids = tokenizer.encode(prompt)
+        idx = torch.tensor([ids], device=device)
+        out = model.generate(idx, max_new_tokens=max_new_tokens)
+        text = tokenizer.decode(out[0].tolist(), skip_special_tokens=True)
+        print(f"  | {text}")
+    print("  ---------------")
+    model.train()
+
+
 def run_name(config):
     bn = config["bottleneck"]
     if bn["type"] == "none":
@@ -87,6 +110,8 @@ def train(config, output_dir="results", device=None, max_steps=None):
     model = Transformer(config).to(device)
     print(f"[{name}] params={model.count_parameters():,}")
 
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
     data_cfg = config.get("data", {})
     train_dl, val_dl = get_dataloaders(
         config,
@@ -101,10 +126,12 @@ def train(config, output_dir="results", device=None, max_steps=None):
         total_steps = min(total_steps, max_steps)
 
     log_every = tc.get("log_every_steps", 500)
+    patience = tc.get("early_stop_patience", 0)  # 0 = disabled
 
     step = 0
     log = []
-    val_loss, val_ppl = float("nan"), float("nan")
+    best_val_loss = float("inf")
+    patience_counter = 0
 
     for epoch in range(tc["epochs"]):
         pbar = tqdm(train_dl, desc=f"[{name}] epoch {epoch}")
@@ -133,13 +160,25 @@ def train(config, output_dir="results", device=None, max_steps=None):
             if step % log_every == 0:
                 print(f"[{name}] step {step} | train_loss={loss.item():.4f} lr={lr:.2e}")
 
-        # End of epoch eval
+        # End of epoch eval + samples
         val_loss, val_ppl = evaluate(model, val_dl, device)
         print(f"[{name}] epoch {epoch} | val_loss={val_loss:.4f} val_ppl={val_ppl:.2f}")
+        generate_samples(model, tokenizer, device)
         log.append({"epoch": epoch, "val_loss": val_loss, "val_ppl": val_ppl, "step": step})
 
         if config.get("checkpoint_every_epoch"):
             torch.save(model.state_dict(), os.path.join(ckpt_dir, f"epoch_{epoch}.pt"))
+
+        # Early stopping
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            torch.save(model.state_dict(), os.path.join(ckpt_dir, "best.pt"))
+        else:
+            patience_counter += 1
+            if patience and patience_counter >= patience:
+                print(f"[{name}] early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                break
 
     # Final checkpoint
     torch.save(model.state_dict(), os.path.join(ckpt_dir, "final.pt"))
@@ -148,5 +187,6 @@ def train(config, output_dir="results", device=None, max_steps=None):
     with open(os.path.join(ckpt_dir, "log.json"), "w") as f:
         json.dump(log, f, indent=2)
 
-    print(f"[{name}] done. final val_ppl={val_ppl:.2f}")
+    val_ppl = math.exp(best_val_loss)
+    print(f"[{name}] done. best val_ppl={val_ppl:.2f}")
     return model, log
