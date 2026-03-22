@@ -1,5 +1,6 @@
 #!/bin/bash
 # Run a sweep of experiments, auto-parallelized across available GPUs.
+# Each GPU gets its own sequential queue so two models never share a GPU.
 #
 # Usage:
 #   bash scripts/run_sweep.sh baseline                    # 4 baseline seeds
@@ -17,36 +18,42 @@ SEEDS="0 1 2 3"
 NUM_GPUS=$(python -c "import torch; print(max(1, torch.cuda.device_count()))" 2>/dev/null || echo 1)
 echo "Detected $NUM_GPUS GPU(s)"
 
-JOB_IDX=0
-
-run_job() {
-    local gpu=$1
-    local seed=$2
-    shift 2
-    echo "=== GPU $gpu | seed=$seed | $* ==="
-    CUDA_VISIBLE_DEVICES=$gpu python scripts/run_experiment.py --seed "$seed" "$@"
-}
-
+# Build the list of jobs (seed + extra args)
+JOBS=()
 if [ "$PLACEMENT" = "baseline" ]; then
     for SEED in $SEEDS; do
-        run_job $((JOB_IDX % NUM_GPUS)) "$SEED" &
-        JOB_IDX=$((JOB_IDX + 1))
-        if (( $(jobs -r | wc -l) >= NUM_GPUS )); then
-            wait -n
-        fi
+        JOBS+=("$SEED|")
     done
-    wait
 else
     for RANK in $RANKS; do
         for SEED in $SEEDS; do
-            run_job $((JOB_IDX % NUM_GPUS)) "$SEED" --placement "$PLACEMENT" --activation "$ACTIVATION" --rank "$RANK" &
-            JOB_IDX=$((JOB_IDX + 1))
-            if (( $(jobs -r | wc -l) >= NUM_GPUS )); then
-                wait -n
-            fi
+            JOBS+=("$SEED|--placement $PLACEMENT --activation $ACTIVATION --rank $RANK")
         done
-        wait  # finish all seeds for this rank before next
     done
 fi
 
+# Run one GPU's queue: takes gpu_id and list of jobs
+run_gpu_queue() {
+    local gpu=$1
+    shift
+    for job in "$@"; do
+        local seed="${job%%|*}"
+        local extra="${job#*|}"
+        echo "=== GPU $gpu | seed=$seed | $extra ==="
+        CUDA_VISIBLE_DEVICES=$gpu python scripts/run_experiment.py --seed "$seed" $extra
+    done
+}
+
+# Distribute jobs round-robin into per-GPU queues, then run each queue in parallel
+for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
+    GPU_JOBS=()
+    for ((i=gpu; i<${#JOBS[@]}; i+=NUM_GPUS)); do
+        GPU_JOBS+=("${JOBS[$i]}")
+    done
+    if [ ${#GPU_JOBS[@]} -gt 0 ]; then
+        run_gpu_queue "$gpu" "${GPU_JOBS[@]}" &
+    fi
+done
+
+wait
 echo "=== All runs complete ==="
